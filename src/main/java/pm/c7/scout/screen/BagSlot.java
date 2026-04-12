@@ -8,14 +8,12 @@ import net.minecraft.screen.slot.Slot;
 import pm.c7.scout.item.BaseBagItem;
 
 public class BagSlot extends Slot {
-    private static final Inventory DUMMY_INVENTORY = new SimpleInventory(54);
-
     private final int scoutIndex;
     private Inventory backingInventory;
     private boolean enabled = false;
 
     public BagSlot(int index, int x, int y) {
-        super(DUMMY_INVENTORY, index, x, y);
+        super(new SimpleInventory(index + 1), index, x, y);
         this.scoutIndex = index;
         this.backingInventory = null;
     }
@@ -24,12 +22,18 @@ public class BagSlot extends Slot {
         this.backingInventory = inventory;
     }
 
+    public Inventory getBackingInventory() {
+        return this.backingInventory;
+    }
+
     public void setEnabled(boolean state) {
         this.enabled = state;
     }
 
     private boolean active() {
-        return enabled && backingInventory != null;
+        if (!enabled || backingInventory == null) return false;
+        if (scoutIndex < 0 || scoutIndex >= backingInventory.size()) return false;
+        return true;
     }
 
     @Override
@@ -40,7 +44,7 @@ public class BagSlot extends Slot {
 
     @Override
     public boolean canTakeItems(PlayerEntity playerEntity) {
-        return true;
+        return active();
     }
 
     @Override
@@ -50,14 +54,19 @@ public class BagSlot extends Slot {
 
     @Override
     public ItemStack getStack() {
-        return backingInventory != null ? backingInventory.getStack(this.scoutIndex) : ItemStack.EMPTY;
+        if (!active()) {
+            return ItemStack.EMPTY;
+        }
+
+        ItemStack stack = backingInventory.getStack(this.scoutIndex);
+        return stack == null ? ItemStack.EMPTY : stack;
     }
 
     @Override
     public void setStack(ItemStack stack) {
-        if (backingInventory != null) {
+        if (active()) {
             backingInventory.setStack(this.scoutIndex, stack);
-            this.markDirty();
+            backingInventory.markDirty();
         } else {
             super.setStack(ItemStack.EMPTY);
         }
@@ -65,8 +74,9 @@ public class BagSlot extends Slot {
 
     @Override
     public void setStackNoCallbacks(ItemStack stack) {
-        if (backingInventory != null) {
+        if (active()) {
             backingInventory.setStack(this.scoutIndex, stack);
+            backingInventory.markDirty();
         } else {
             super.setStackNoCallbacks(ItemStack.EMPTY);
         }
@@ -81,11 +91,34 @@ public class BagSlot extends Slot {
 
     @Override
     public ItemStack takeStack(int amount) {
-        return backingInventory != null ? backingInventory.removeStack(this.scoutIndex, amount) : ItemStack.EMPTY;
+        if (!active()) return ItemStack.EMPTY;
+
+        ItemStack taken = backingInventory.removeStack(this.scoutIndex, amount);
+
+        if (backingInventory != null) {
+            backingInventory.markDirty();
+        }
+
+        if (taken.isEmpty()) {
+            this.enabled = false;
+            this.backingInventory = null;
+        }
+
+        return taken;
     }
 
     @Override
     public int getMaxItemCount() {
         return backingInventory != null ? backingInventory.getMaxCountPerStack() : 0;
+    }
+
+    @Override
+    public int getMaxItemCount(ItemStack stack) {
+        return getMaxItemCount();
+    }
+
+    @Override
+    public boolean hasStack() {
+        return !getStack().isEmpty();
     }
 }

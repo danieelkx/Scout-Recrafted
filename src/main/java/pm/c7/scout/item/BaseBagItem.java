@@ -20,6 +20,7 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtElement;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.registry.RegistryWrapper;
+import net.minecraft.screen.ScreenHandler;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
@@ -29,6 +30,7 @@ import net.minecraft.world.World;
 import pm.c7.scout.Scout;
 import pm.c7.scout.ScoutPlayerScreenHandler;
 import pm.c7.scout.ScoutUtil;
+import pm.c7.scout.ScoutUtil.EquippedBagRef;
 import pm.c7.scout.screen.BagSlot;
 
 public class BaseBagItem extends TrinketItem {
@@ -84,13 +86,41 @@ public class BaseBagItem extends TrinketItem {
     }
 
     public Inventory getInventory(ItemStack stack, RegistryWrapper.WrapperLookup registries) {
+        return createInventory(stack, null, registries);
+    }
+
+    public Inventory getInventory(EquippedBagRef ref, RegistryWrapper.WrapperLookup registries) {
+        return createInventory(ref.stack(), ref, registries);
+    }
+
+    private Inventory createInventory(ItemStack stack, EquippedBagRef ref, RegistryWrapper.WrapperLookup registries) {
         SimpleInventory inventory = new SimpleInventory(this.slots) {
             @Override
             public void markDirty() {
-                NbtComponent existing = stack.getOrDefault(DataComponentTypes.CUSTOM_DATA, NbtComponent.DEFAULT);
-                NbtCompound compound = existing.copyNbt();
-                compound.put(ITEMS_KEY, ScoutUtil.inventoryToTag(this, registries));
-                stack.set(DataComponentTypes.CUSTOM_DATA, NbtComponent.of(compound));
+                ItemStack targetStack = stack;
+
+                if (ref != null && ref.inventory() != null) {
+                    try {
+                        int liveIndex = ref.slotIndex();
+                        if (liveIndex >= 0 && liveIndex < ref.inventory().size()) {
+                            ItemStack liveStack = ref.inventory().getStack(liveIndex);
+                            if (!liveStack.isEmpty()) {
+                                targetStack = liveStack;
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                scout$writeInventoryToStack(targetStack, this, registries);
+
+                if (ref != null && ref.inventory() != null) {
+                    try {
+                        ref.inventory().markDirty();
+                    } catch (Throwable ignored) {
+                    }
+                }
+
                 super.markDirty();
             }
         };
@@ -138,6 +168,7 @@ public class BaseBagItem extends TrinketItem {
     @Override
     public void onUnequip(ItemStack stack, SlotReference slotRef, LivingEntity entity) {
         if (entity instanceof PlayerEntity player) {
+            scout$flushCurrentOpenBags(player);
             scout$queueRefresh(player);
         }
     }
@@ -162,57 +193,129 @@ public class BaseBagItem extends TrinketItem {
         }
     }
 
-    public static void refreshAllSlots(PlayerEntity player, RegistryWrapper.WrapperLookup registries) {
-        if (!(player.playerScreenHandler instanceof ScoutPlayerScreenHandler handler)) {
+    private static void scout$writeInventoryToStack(ItemStack stack, Inventory inventory, RegistryWrapper.WrapperLookup registries) {
+        if (stack == null || stack.isEmpty() || inventory == null) return;
+
+        SimpleInventory copy = new SimpleInventory(inventory.size());
+        for (int i = 0; i < inventory.size(); i++) {
+            copy.setStack(i, inventory.getStack(i).copy());
+        }
+
+        NbtComponent existing = stack.getOrDefault(DataComponentTypes.CUSTOM_DATA, NbtComponent.DEFAULT);
+        NbtCompound compound = existing.copyNbt();
+        compound.put(ITEMS_KEY, ScoutUtil.inventoryToTag(copy, registries));
+        stack.set(DataComponentTypes.CUSTOM_DATA, NbtComponent.of(compound));
+    }
+
+    private static void scout$flushSlots(DefaultedList<BagSlot> slots) {
+        for (BagSlot slot : slots) {
+            if (slot.getBackingInventory() != null) {
+                slot.markDirty();
+            }
+        }
+    }
+
+    private static void scout$sanitizeSlots(DefaultedList<BagSlot> slots) {
+        for (BagSlot slot : slots) {
+            Inventory inv = slot.getBackingInventory();
+            if (inv == null) {
+                slot.setEnabled(false);
+                continue;
+            }
+
+            if (slot.getStack().isEmpty() && !slot.isEnabled()) {
+                slot.setInventory(null);
+                slot.setEnabled(false);
+            }
+        }
+    }
+
+    private static void scout$flushCurrentOpenBags(PlayerEntity player) {
+        if (player.playerScreenHandler instanceof ScoutPlayerScreenHandler handler) {
+            scout$flushSlots(handler.scout$getSatchelSlots());
+            scout$flushSlots(handler.scout$getLeftPouchSlots());
+            scout$flushSlots(handler.scout$getRightPouchSlots());
+        }
+
+        if (player.currentScreenHandler != player.playerScreenHandler
+                && player.currentScreenHandler instanceof ScoutPlayerScreenHandler handler) {
+            scout$flushSlots(handler.scout$getSatchelSlots());
+            scout$flushSlots(handler.scout$getLeftPouchSlots());
+            scout$flushSlots(handler.scout$getRightPouchSlots());
+        }
+    }
+
+    private static void scout$clearSlots(DefaultedList<BagSlot> slots) {
+        for (BagSlot slot : slots) {
+            slot.setInventory(null);
+            slot.setEnabled(false);
+        }
+    }
+
+    private static void scout$bindSlots(DefaultedList<BagSlot> slots, EquippedBagRef ref, RegistryWrapper.WrapperLookup registries) {
+        if (slots == null || slots.isEmpty()) {
             return;
         }
 
-        ItemStack satchelStack = ScoutUtil.findBagItem(player, BagType.SATCHEL, false);
+        if (ref == null || ref.stack().isEmpty() || !(ref.stack().getItem() instanceof BaseBagItem item)) {
+            return;
+        }
+
+        Inventory inv = item.getInventory(ref, registries);
+        int max = Math.min(slots.size(), item.getSlotCount());
+
+        for (int i = 0; i < max; i++) {
+            slots.get(i).setInventory(inv);
+            slots.get(i).setEnabled(true);
+        }
+
+        for (int i = max; i < slots.size(); i++) {
+            slots.get(i).setInventory(null);
+            slots.get(i).setEnabled(false);
+        }
+    }
+
+    private static void scout$refreshHandler(ScreenHandler rawHandler, PlayerEntity player, RegistryWrapper.WrapperLookup registries) {
+        if (!(rawHandler instanceof ScoutPlayerScreenHandler handler)) {
+            return;
+        }
+
         DefaultedList<BagSlot> satchelSlots = handler.scout$getSatchelSlots();
-
-        for (int i = 0; i < Scout.MAX_SATCHEL_SLOTS; i++) {
-            satchelSlots.get(i).setInventory(null);
-            satchelSlots.get(i).setEnabled(false);
-        }
-
-        if (!satchelStack.isEmpty() && satchelStack.getItem() instanceof BaseBagItem item) {
-            Inventory inv = item.getInventory(satchelStack, registries);
-            for (int i = 0; i < item.getSlotCount(); i++) {
-                satchelSlots.get(i).setInventory(inv);
-                satchelSlots.get(i).setEnabled(true);
-            }
-        }
-
-        ItemStack leftPouchStack = ScoutUtil.findBagItem(player, BagType.POUCH, false);
         DefaultedList<BagSlot> leftPouchSlots = handler.scout$getLeftPouchSlots();
-
-        for (int i = 0; i < Scout.MAX_POUCH_SLOTS; i++) {
-            leftPouchSlots.get(i).setInventory(null);
-            leftPouchSlots.get(i).setEnabled(false);
-        }
-
-        if (!leftPouchStack.isEmpty() && leftPouchStack.getItem() instanceof BaseBagItem item) {
-            Inventory inv = item.getInventory(leftPouchStack, registries);
-            for (int i = 0; i < item.getSlotCount(); i++) {
-                leftPouchSlots.get(i).setInventory(inv);
-                leftPouchSlots.get(i).setEnabled(true);
-            }
-        }
-
-        ItemStack rightPouchStack = ScoutUtil.findBagItem(player, BagType.POUCH, true);
         DefaultedList<BagSlot> rightPouchSlots = handler.scout$getRightPouchSlots();
 
-        for (int i = 0; i < Scout.MAX_POUCH_SLOTS; i++) {
-            rightPouchSlots.get(i).setInventory(null);
-            rightPouchSlots.get(i).setEnabled(false);
+        if ((satchelSlots == null || satchelSlots.isEmpty())
+                && (leftPouchSlots == null || leftPouchSlots.isEmpty())
+                && (rightPouchSlots == null || rightPouchSlots.isEmpty())) {
+            return;
         }
 
-        if (!rightPouchStack.isEmpty() && rightPouchStack.getItem() instanceof BaseBagItem item) {
-            Inventory inv = item.getInventory(rightPouchStack, registries);
-            for (int i = 0; i < item.getSlotCount(); i++) {
-                rightPouchSlots.get(i).setInventory(inv);
-                rightPouchSlots.get(i).setEnabled(true);
-            }
+        scout$flushSlots(satchelSlots);
+        scout$flushSlots(leftPouchSlots);
+        scout$flushSlots(rightPouchSlots);
+
+        EquippedBagRef satchelRef = ScoutUtil.findBagRef(player, BagType.SATCHEL, false);
+        EquippedBagRef leftPouchRef = ScoutUtil.findBagRef(player, BagType.POUCH, false);
+        EquippedBagRef rightPouchRef = ScoutUtil.findBagRef(player, BagType.POUCH, true);
+
+        scout$clearSlots(satchelSlots);
+        scout$clearSlots(leftPouchSlots);
+        scout$clearSlots(rightPouchSlots);
+
+        scout$bindSlots(satchelSlots, satchelRef, registries);
+        scout$bindSlots(leftPouchSlots, leftPouchRef, registries);
+        scout$bindSlots(rightPouchSlots, rightPouchRef, registries);
+
+        scout$sanitizeSlots(satchelSlots);
+        scout$sanitizeSlots(leftPouchSlots);
+        scout$sanitizeSlots(rightPouchSlots);
+    }
+
+    public static void refreshAllSlots(PlayerEntity player, RegistryWrapper.WrapperLookup registries) {
+        scout$refreshHandler(player.playerScreenHandler, player, registries);
+
+        if (player.currentScreenHandler != player.playerScreenHandler) {
+            scout$refreshHandler(player.currentScreenHandler, player, registries);
         }
     }
 

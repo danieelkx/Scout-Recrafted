@@ -45,15 +45,15 @@ public class SatchelBodyModel {
         ModelPartData strapGroup = body.addChild(
                 "strap",
                 ModelPartBuilder.create()
-                        .uv(18, 25).cuboid(2.0F, -0.5F, -1.0F, 1.0F, 1.0F, 6.0F),
+                        .uv(18, 25).cuboid(2.2F, -0.3F, -0.8F, 0.6F, 0.6F, 5.6F),
                 ModelTransform.of(2.0F, 0.0F, -2.0F, 0.0F, 0.0F, 0.0F)
         );
 
         strapGroup.addChild(
                 "cube_r1",
                 ModelPartBuilder.create()
-                        .uv(0, 15).cuboid(-0.5F, -8.0F, -0.5F, 1.0F, 17.0F, 1.0F)
-                        .uv(5, 14).cuboid(-0.5F, -8.0F, -5.5F, 1.0F, 17.0F, 1.0F),
+                        .uv(0, 15).cuboid(-0.3F, -8.0F, -0.3F, 0.6F, 17.0F, 0.6F)
+                        .uv(5, 14).cuboid(-0.3F, -8.0F, -5.3F, 0.6F, 17.0F, 0.6F),
                 ModelTransform.of(-2.7593F, 5.9498F, 4.5F, 0.0F, 0.0F, 0.6981F)
         );
 
