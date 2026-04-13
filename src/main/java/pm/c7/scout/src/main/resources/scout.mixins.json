@@ -1,0 +1,21 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "pm.c7.scout.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "PlayerInventoryMixin",
+    "PlayerScreenHandlerMixin",
+    "ScreenHandlerMixin",
+    "ServerPlayerEntityMixin"
+  ],
+  "client": [
+    "ClientNetworkHandlerMixin",
+    "InventoryScreenMixin",
+    "HandledScreenAccessor",
+    "RecipeBookWidgetMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
